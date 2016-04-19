@@ -373,6 +373,9 @@ func (r *raft) bcastHeartbeat() {
 // the commit index changed (in which case the caller should call
 // r.bcastAppend).
 func (r *raft) maybeCommit() bool {
+	if len(r.prs) == 0 {
+		return false
+	}
 	// TODO(bmizerany): optimize.. Currently naive
 	mis := make(uint64Slice, 0, len(r.prs))
 	for id := range r.prs {
