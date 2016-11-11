@@ -960,6 +960,7 @@ func (s *EtcdServer) send(ms []raftpb.Message) {
 			}
 		}
 		if ms[i].Type == raftpb.MsgHeartbeat {
+			s.r.a.Observe(ms[i].To)
 			ok, exceed := s.r.td.Observe(ms[i].To)
 			if !ok {
 				// TODO: limit request rate.

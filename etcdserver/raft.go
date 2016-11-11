@@ -18,8 +18,10 @@ import (
 	"encoding/json"
 	"expvar"
 	"os"
+	"runtime"
 	"sort"
 	"sync"
+
 	"sync/atomic"
 	"time"
 
@@ -119,9 +121,52 @@ type raftNode struct {
 	transport rafthttp.Transporter
 
 	td *contention.TimeoutDetector
+	a  *andy
 
 	stopped chan struct{}
 	done    chan struct{}
+}
+
+type andy struct {
+	lock    sync.Mutex
+	timeout time.Duration
+	resets  map[uint64]chan struct{}
+}
+
+func newAndy(timeout time.Duration) *andy {
+	return &andy{
+		timeout: timeout,
+		resets:  make(map[uint64]chan struct{}),
+	}
+}
+
+func (a *andy) Observe(to uint64) {
+	a.lock.Lock()
+	defer a.lock.Unlock()
+
+	if stop, ok := a.resets[to]; ok {
+		stop <- struct{}{}
+		return
+	}
+
+	stop := make(chan struct{})
+	a.resets[to] = stop
+
+	go func() {
+		timer := time.NewTimer(a.timeout)
+
+		for {
+			select {
+			case <-stop:
+				timer.Reset(a.timeout)
+			case <-timer.C:
+				plog.Errorf("SLOW HEARTBEAT SENDING")
+				buf := make([]byte, 64*1024)
+				stack := runtime.Stack(buf, true)
+				plog.Errorf("%s", string(stack))
+			}
+		}
+	}()
 }
 
 // start prepares and starts raftNode in a new goroutine. It is no longer safe
@@ -140,6 +185,8 @@ func (r *raftNode) start(s *EtcdServer) {
 	// set up contention detectors for raft heartbeat message.
 	// expect to send a heartbeat within 2 heartbeat intervals.
 	r.td = contention.NewTimeoutDetector(2 * heartbeat)
+
+	r.a = newAndy(2 * heartbeat)
 
 	go func() {
 		var syncC <-chan time.Time
